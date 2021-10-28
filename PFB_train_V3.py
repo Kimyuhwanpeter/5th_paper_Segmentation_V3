@@ -1,4 +1,5 @@
 # -*- coding:utf-8 -*-
+#%%
 from modified_deeplab_V3 import *
 from PFB_measurement import Measurement
 from random import shuffle, random
@@ -141,23 +142,22 @@ def cal_loss(model, images, labels, crop_objectiness, weed_objectiness, total_ob
         weed_im_plain = tf.cast(tf.reshape(weed_im_plain, [-1,]), tf.float32)
 
         ##########################################################################################################
-        crop_obj_indices = tf.squeeze(tf.where(tf.equal(tf.reshape(crop_objectiness, [-1,]), 1)), 1)
+        crop_obj_indices = tf.squeeze(tf.where(tf.equal(tf.reshape(crop_objectiness, [-1,]), 0)), 1)
         crop_logit_objectiness = tf.gather(raw_logits[:, 3], crop_obj_indices)
         crop_label_objectiness = tf.cast(tf.gather(tf.reshape(crop_objectiness, [-1,]), crop_obj_indices), tf.float32)
-        crop_obj_loss = -crop_label_objectiness * tf.math.log(tf.nn.sigmoid(crop_logit_objectiness) + 1e-7)
+        crop_obj_loss = -(1. - crop_label_objectiness) * tf.math.log(1 - tf.nn.sigmoid(crop_logit_objectiness) + 1e-7)
         crop_obj_loss = tf.reduce_mean(crop_obj_loss)
 
-        no_crop_obj_indices = tf.squeeze(tf.where(tf.not_equal(tf.reshape(crop_objectiness, [-1,]), 1)),1)
+        no_crop_obj_indices = tf.squeeze(tf.where(tf.not_equal(tf.reshape(crop_objectiness, [-1,]), 0)),1)
         no_crop_logit_objectiness = tf.gather(raw_logits[:, 3], no_crop_obj_indices)
         no_crop_label_objectiness = tf.cast(tf.gather(tf.reshape(crop_objectiness, [-1,]), no_crop_obj_indices), tf.float32)
-        no_crop_obj_loss = -(1. - no_crop_label_objectiness) * tf.math.log(1 - tf.nn.sigmoid(no_crop_logit_objectiness) + 1e-7)
+        no_crop_obj_loss = -no_crop_label_objectiness * tf.math.log(tf.nn.sigmoid(no_crop_logit_objectiness) + 1e-7)
         no_crop_obj_loss = tf.reduce_mean(no_crop_obj_loss)
 
         crop_logit = raw_logits[:, 2]
         cast_crop_objectiness = tf.cast(tf.reshape(crop_objectiness, [-1,]), tf.float32)
-        crop_loss = dice_loss(cast_crop_objectiness, crop_logit) \
-            + tf.nn.sigmoid_cross_entropy_with_logits(cast_crop_objectiness, crop_logit) * crop_im_plain
-        crop_loss = tf.reduce_mean(crop_loss) + crop_obj_loss + no_crop_obj_loss
+        crop_loss = dice_loss(cast_crop_objectiness, crop_logit)
+        crop_loss = crop_loss + crop_obj_loss + no_crop_obj_loss
 
         weed_obj_indices = tf.squeeze(tf.where(tf.equal(tf.reshape(weed_objectiness, [-1,]), 1)), 1)
         weed_logit_objectiness = tf.gather(raw_logits[:, 5], weed_obj_indices)
@@ -173,11 +173,33 @@ def cal_loss(model, images, labels, crop_objectiness, weed_objectiness, total_ob
 
         weed_logit = raw_logits[:, 4]
         cast_weed_objectiness = tf.cast(tf.reshape(weed_objectiness, [-1,]), tf.float32)
-        weed_loss = dice_loss(cast_weed_objectiness, weed_logit) \
-            + tf.nn.sigmoid_cross_entropy_with_logits(cast_weed_objectiness, weed_logit) * weed_im_plain
-        weed_loss = tf.reduce_mean(weed_loss) + weed_obj_loss + no_weed_obj_loss
+        weed_loss = dice_loss(cast_weed_objectiness, weed_logit)
+        weed_loss = weed_loss + weed_obj_loss + no_weed_obj_loss
         ##########################################################################################################
-        
+
+
+        #
+        # crop logit --> crop/weed logit; weedd logit --> crop/weed logits (attention??)
+        # need to fix!!!!!!!!!!!!!!!!!!!!!11!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+        ##########################################################
+        # if this result is not good then use this!!!! remember!!!!!!!!!!!!!!!!!!!!!!!!!'
+        # or i can add in V2 --> remember!!!!!!!!!!!!!!!!!!!!!!
+        crop_predict = tf.nn.sigmoid(predict[:, 2])        
+        crop_indices = tf.squeeze(tf.where(tf.not_equal(batch_labels, 1)),1)
+        weed_predict = tf.nn.sigmoid(predict[:, 4])
+        weed_indices = tf.squeeze(tf.where(tf.not_equal(batch_labels, 0)),1)
+
+        numpy_predict = predict.numpy()
+        numpy_crop_predict = crop_predict.numpy()
+        numpy_weed_predict = weed_predict.numpy()
+
+        numpy_predict[crop_indices, 0] = numpy_crop_predict[crop_indices]*numpy_predict[crop_indices, 0]
+        numpy_predict[weed_indices, 0] = numpy_weed_predict[weed_indices]*numpy_predict[weed_indices, 0]
+
+        # and if i add this, then i need to fix final output images!!!!!!! (final oujtput only crop/weed plain)
+        ##########################################################
+        #
+
         label_objectiness = tf.cast(tf.reshape(total_objectiness, [-1,]), tf.float32)
         logit_objectiness = raw_logits[:, 1]
 
@@ -193,8 +215,8 @@ def cal_loss(model, images, labels, crop_objectiness, weed_objectiness, total_ob
         obj_loss = -yes_obj_labels * tf.math.log(tf.nn.sigmoid(yes_logit_objectiness) + 1e-7)
         obj_loss = tf.reduce_mean(obj_loss)
 
-        seg_loss = dice_loss(batch_labels, predict[:, 0]) \
-            + tf.nn.sigmoid_cross_entropy_with_logits(batch_labels, predict[:, 0]) * class_im_plain
+        seg_loss = dice_loss(batch_labels, numpy_predict[:, 0]) \
+            + tf.nn.sigmoid_cross_entropy_with_logits(batch_labels, numpy_predict[:, 0])
         seg_loss = tf.reduce_mean(seg_loss) + obj_loss + no_obj_loss
         
         loss = seg_loss + weed_loss + crop_loss
@@ -283,14 +305,15 @@ def main():
                 crop_objectiness = np.where(crop_labels == 2, 0, crop_labels)  # crop 피사체가 있는곳은 1 없는곳은 0으로 만들어준것
                 crop_objectiness = np.where(crop_labels == 1, 0, crop_objectiness) # crop 피사체가 있는곳은 1 없는곳은 0으로 만들어준것
                 crop_objectiness = np.where(crop_labels == 0, 1, crop_objectiness) # crop 피사체가 있는곳은 1 없는곳은 0으로 만들어준것
-                #plt.imshow(crop_objectiness[0, :, :, 0]*255, cmap="gray")
-                #plt.show()
+                crop_objectiness = np.where(crop_objectiness == 1, 0, 1)
+                # plt.imshow(crop_objectiness[0, :, :, 0]*255, cmap="gray")
+                # plt.show()
 
                 weed_objectiness = np.where(weed_labels == 2, 0, weed_labels) # weed 피사체가 있는곳은 1 없는곳은 0으로 만들어준것
                 weed_objectiness = np.where(weed_labels == 0, 0, weed_objectiness) # weed 피사체가 있는곳은 1 없는곳은 0으로 만들어준것
                 weed_objectiness = np.where(weed_labels == 1, 1, weed_objectiness) # weed 피사체가 있는곳은 1 없는곳은 0으로 만들어준것
-                #plt.imshow(weed_objectiness[0, :, :, 0]*255, cmap="gray")
-                #plt.show()
+                # plt.imshow(weed_objectiness[0, :, :, 0]*255, cmap="gray")
+                # plt.show()
 
                 total_objectiness = np.where(batch_labels == 2, 0, 1)  # 피사체가 있는곳은 1 없는곳은 0으로 만들어준것
                 #plt.imshow(total_objectiness[0, :, :, 0]*255, cmap="gray")
@@ -350,70 +373,42 @@ def main():
                     weed_objects = tf.nn.sigmoid(logits[:, :, :, 5])
                     for i in range(FLAGS.batch_size):
                         crop_weed_image = crop_weed_images[i]
-                        crop_weed_image = np.where(crop_weed_image.numpy() >= 0.5, 1, 0)    # 1:weed, 0: crop
-                        predict_temp = crop_weed_image
+                        # crop_weed_image = np.where(crop_weed_image.numpy() >= 0.5, 1, 0)    # 1:weed, 0: crop
+                        predict_temp = crop_weed_image.numpy()
                         crop_weed_object = crop_weed_objects[i]
                         crop_weed_object = np.where(crop_weed_object.numpy() >= 0.5, 1, 2)  # 1:crop/weed object, 2: background
+
                         crop_image = crop_images[i]
-                        crop_image = np.where(crop_image.numpy() >= 0.5, 1, 0)  # 1:crop, 0:background
+                        crop_image = np.where(crop_image.numpy() <= 0.5, crop_image.numpy(), 1)  # 1:background
                         predict_temp2 = crop_image
                         crop_object = crop_objects[i]
-                        crop_object = np.where(crop_object.numpy() >= 0.5, 1, 2)    # 1:crop object, 0:background
+                        crop_object = np.where(crop_object.numpy() <= 0.5, 0, 1)    # 0:crop object, 1:background
+
                         weed_image = weed_images[i]
-                        weed_image = np.where(weed_image.numpy() >= 0.5, 1, 0)  # 1:weed, 0: background
+                        weed_image = np.where(weed_image.numpy() >= 0.5, weed_image.numpy(), 0)  # 1:weed, 0: background
                         predict_temp3 = weed_image
                         weed_object = weed_objects[i]
-                        weed_object = np.where(weed_object.numpy() >= 0.5, 1, 2)    # 1: weed object, 2: background
+                        weed_object = np.where(weed_object.numpy() >= 0.5, 1, 0)    # 1: weed object, 0: background
+                        
+                        # predict_temp = np.expand_dims(predict_temp, -1)
+                        # crop_image???????
+                        c_object_predict_axis = np.where(crop_object==1)
+                        predict_temp2[c_object_predict_axis] = 1
+                        predict_temp2_indices = np.where(predict_temp2!=1)
+                        predict_temp[predict_temp2_indices] = predict_temp[predict_temp2_indices] \
+                                                                * predict_temp2[predict_temp2_indices]
 
+                        w_object_predict_axis = np.where(weed_object==0)
+                        predict_temp3[w_object_predict_axis] = 0
+                        predict_temp3_indices = np.where(predict_temp3!=0)
+                        predict_temp[predict_temp3_indices] = predict_temp[predict_temp3_indices] \
+                                                                * predict_temp3[predict_temp3_indices]
+
+                        predict_temp = np.where(predict_temp >= 0.5, 1, 0)
                         cw_object_predict_axis = np.where(crop_weed_object==2)
                         predict_temp[cw_object_predict_axis] = 2    # 이 모델은 전 버전에서 잘 나온것을 확인했음
-                        predict_temp = np.expand_dims(predict_temp, -1)
 
-                        c_object_predict_axis = np.where(crop_object==2)
-                        c_object_predict_axis2 = np.where(crop_object!=2)
-                        predict_temp2[c_object_predict_axis] = 2
-                        predict_temp2[c_object_predict_axis2] = 0
-                        predict_temp2 = np.expand_dims(predict_temp2, -1)
-
-                        w_object_predict_axis = np.where(weed_object==2)
-                        w_object_predict_axis2 = np.where(weed_object!=2)
-                        predict_temp3[w_object_predict_axis] = 2
-                        predict_temp3[w_object_predict_axis2] = 1
-                        predict_temp3 = np.expand_dims(predict_temp3, -1)
-
-                        predict_temp4 = np.concatenate([predict_temp, predict_temp2, predict_temp3], -1)
-
-
-                        pred_mask_color = np.where(predict_temp4 == np.array([0,0,0], dtype=np.uint8),
-                                                   np.array([255,0,0], dtype=np.uint8),
-                                                   predict_temp4)
-                        pred_mask_color = np.where(predict_temp4 == np.array([1,1,1], dtype=np.uint8),
-                                                   np.array([0,0,255], dtype=np.uint8),
-                                                   pred_mask_color)
-                        pred_mask_color = np.where(predict_temp4 == np.array([2,2,2], dtype=np.uint8),
-                                                   np.array([0,0,0], dtype=np.uint8),
-                                                   pred_mask_color)
-                        func1 = lambda f:f != np.array([0,0,0], dtype=np.uint8)
-                        func2 = lambda f:f != np.array([1,1,1], dtype=np.uint8)
-                        pred_mask_color = np.where(func1(predict_temp4)&func2(predict_temp4),
-                                                   np.array([0,0,0], dtype=np.uint8),
-                                                   pred_mask_color)
-
-                        func3 = lambda r: r[:, :, 0] == 255 
-                        func4 = lambda g: g[:, :, 1] == 0 
-                        func5 = lambda b: b[:, :, 2] == 0
-
-                        func6 = lambda r: r[:, :, 0] == 0 
-                        func7 = lambda g: g[:, :, 1] == 0 
-                        func8 = lambda b: b[:, :, 2] == 255
-
-                        metric_pred = np.zeros([FLAGS.img_size, FLAGS.img_size], dtype=np.uint8) + 2
-                        metric_pred = np.where(func3(pred_mask_color) & func4(pred_mask_color) & func5(pred_mask_color), 0, 2)
-                        metric_pred = np.where(func6(pred_mask_color) & func7(pred_mask_color) & func8(pred_mask_color), 1, metric_pred)
-                        pred_mask_color = color_map[metric_pred]
-
-                        pred_mask_color2 = color_map[predict_temp]
-                        pred_mask_color2 = np.squeeze(pred_mask_color2, 2)
+                        pred_mask_color = color_map[predict_temp]
 
                         label = batch_labels[i]
                         label = np.concatenate((label, label, label), -1)
@@ -423,7 +418,6 @@ def main():
 
                         plt.imsave(FLAGS.sample_images + "/{}_batch_{}".format(count, i) + "_label.png", label_mask_color)
                         plt.imsave(FLAGS.sample_images + "/{}_batch_{}".format(count, i) + "_predict.png", pred_mask_color)
-                        plt.imsave(FLAGS.sample_images + "/{}_batch_{}".format(count, i) + "_predict2.png", pred_mask_color2)
                     
 
                 count += 1
@@ -450,65 +444,40 @@ def main():
 
 
                     crop_weed_image = crop_weed_images[0]
-                    crop_weed_image = np.where(crop_weed_image.numpy() >= 0.5, 1, 0)    # 1:weed, 0: crop
-                    predict_temp = crop_weed_image
+                    # crop_weed_image = np.where(crop_weed_image.numpy() >= 0.5, 1, 0)    # 1:weed, 0: crop
+                    predict_temp = crop_weed_image.numpy()
                     crop_weed_object = crop_weed_objects[0]
                     crop_weed_object = np.where(crop_weed_object.numpy() >= 0.5, 1, 2)  # 1:crop/weed object, 2: background
+
                     crop_image = crop_images[0]
-                    crop_image = np.where(crop_image.numpy() >= 0.5, 1, 0)  # 1:crop, 0:background
+                    crop_image = np.where(crop_image.numpy() <= 0.5, crop_image.numpy(), 1)  # 1:background
                     predict_temp2 = crop_image
                     crop_object = crop_objects[0]
-                    crop_object = np.where(crop_object.numpy() >= 0.5, 1, 2)    # 1:crop object, 2:background
+                    crop_object = np.where(crop_object.numpy() <= 0.5, 0, 1)    # 0:crop object, 1:background
+
                     weed_image = weed_images[0]
-                    weed_image = np.where(weed_image.numpy() >= 0.5, 1, 0)  # 1:weed, 0: background
+                    weed_image = np.where(weed_image.numpy() >= 0.5, weed_image.numpy(), 0)  # 1:weed, 0: background
                     predict_temp3 = weed_image
                     weed_object = weed_objects[0]
-                    weed_object = np.where(weed_object.numpy() >= 0.5, 1, 2)    # 1: weed object, 2: background
+                    weed_object = np.where(weed_object.numpy() >= 0.5, 1, 0)    # 1: weed object, 0: background
+                    
+                    # predict_temp = np.expand_dims(predict_temp, -1)
+                    # crop_image???????
+                    c_object_predict_axis = np.where(crop_object==1)
+                    predict_temp2[c_object_predict_axis] = 1
+                    predict_temp2_indices = np.where(predict_temp2!=1)
+                    predict_temp[predict_temp2_indices] = predict_temp[predict_temp2_indices] \
+                                                            * predict_temp2[predict_temp2_indices]
 
+                    w_object_predict_axis = np.where(weed_object==0)
+                    predict_temp3[w_object_predict_axis] = 0
+                    predict_temp3_indices = np.where(predict_temp3!=0)
+                    predict_temp[predict_temp3_indices] = predict_temp[predict_temp3_indices] \
+                                                            * predict_temp3[predict_temp3_indices]
+
+                    predict_temp = np.where(predict_temp >= 0.5, 1, 0)
                     cw_object_predict_axis = np.where(crop_weed_object==2)
                     predict_temp[cw_object_predict_axis] = 2    # 이 모델은 전 버전에서 잘 나온것을 확인했음
-                    predict_temp = np.expand_dims(predict_temp, -1)
-
-                    c_object_predict_axis = np.where(crop_object==2)
-                    c_object_predict_axis2 = np.where(crop_object!=2)
-                    predict_temp2[c_object_predict_axis] = 2
-                    predict_temp2[c_object_predict_axis2] = 0
-                    predict_temp2 = np.expand_dims(predict_temp2, -1)
-
-                    w_object_predict_axis = np.where(weed_object==2)
-                    w_object_predict_axis2 = np.where(weed_object!=2)
-                    predict_temp3[w_object_predict_axis] = 2
-                    predict_temp3[w_object_predict_axis2] = 1
-                    predict_temp3 = np.expand_dims(predict_temp3, -1)
-
-                    predict_temp4 = np.concatenate([predict_temp, predict_temp2, predict_temp3], -1)
-
-
-                    pred_mask_color = np.where(predict_temp4 == np.array([0,0,0], dtype=np.uint8),
-                                                np.array([255,0,0], dtype=np.uint8),
-                                                predict_temp4)
-                    pred_mask_color = np.where(predict_temp4 == np.array([1,1,1], dtype=np.uint8),
-                                                np.array([0,0,255], dtype=np.uint8),
-                                                pred_mask_color)
-                    pred_mask_color = np.where(predict_temp4 == np.array([2,2,2], dtype=np.uint8),
-                                                np.array([0,0,0], dtype=np.uint8),
-                                                pred_mask_color)
-                    func1 = lambda f:f != np.array([0,0,0], dtype=np.uint8)
-                    func2 = lambda f:f != np.array([1,1,1], dtype=np.uint8)
-                    pred_mask_color = np.where(func1(predict_temp4)&func2(predict_temp4),
-                                                np.array([0,0,0], dtype=np.uint8),
-                                                pred_mask_color)
-                    func3 = lambda r: r[:, :, 0] == 255 
-                    func4 = lambda g: g[:, :, 1] == 0 
-                    func5 = lambda b: b[:, :, 2] == 0
-
-                    func6 = lambda r: r[:, :, 0] == 0 
-                    func7 = lambda g: g[:, :, 1] == 0 
-                    func8 = lambda b: b[:, :, 2] == 255
-
-                    metric_pred = np.zeros([FLAGS.img_size, FLAGS.img_size], dtype=np.uint8) + 2
-                    metric_pred = np.where(func3(pred_mask_color) & func4(pred_mask_color) & func5(pred_mask_color), 0, 2)
-                    metric_pred = np.where(func6(pred_mask_color) & func7(pred_mask_color) & func8(pred_mask_color), 1, metric_pred)
 
                     label = batch_labels[j]
                     label = tf.cast(label, tf.uint8).numpy()
@@ -521,15 +490,15 @@ def main():
                     label_mask_color = np.where(label == np.array([0,0,0], dtype=np.uint8), np.array([255, 0, 0], dtype=np.uint8), label_mask_color)
                     label_mask_color = np.where(label == np.array([1,1,1], dtype=np.uint8), np.array([0, 0, 255], dtype=np.uint8), label_mask_color)
 
-                    miou_, crop_iou_, weed_iou_ = Measurement(predict=metric_pred,
+                    miou_, crop_iou_, weed_iou_ = Measurement(predict=predict_temp,
                                         label=batch_label, 
                                         shape=[FLAGS.img_size*FLAGS.img_size, ], 
                                         total_classes=FLAGS.total_classes).MIOU()
-                    f1_score_, recall_ = Measurement(predict=metric_pred,
+                    f1_score_, recall_ = Measurement(predict=predict_temp,
                                             label=batch_label,
                                             shape=[FLAGS.img_size*FLAGS.img_size, ],
                                             total_classes=FLAGS.total_classes).F1_score_and_recall()
-                    tdr_ = Measurement(predict=metric_pred,
+                    tdr_ = Measurement(predict=predict_temp,
                                             label=batch_label,
                                             shape=[FLAGS.img_size*FLAGS.img_size, ],
                                             total_classes=FLAGS.total_classes).TDR()
@@ -587,66 +556,40 @@ def main():
 
 
                     crop_weed_image = crop_weed_images[0]
-                    crop_weed_image = np.where(crop_weed_image.numpy() >= 0.5, 1, 0)    # 1:weed, 0: crop
-                    predict_temp = crop_weed_image
+                    # crop_weed_image = np.where(crop_weed_image.numpy() >= 0.5, 1, 0)    # 1:weed, 0: crop
+                    predict_temp = crop_weed_image.numpy()
                     crop_weed_object = crop_weed_objects[0]
                     crop_weed_object = np.where(crop_weed_object.numpy() >= 0.5, 1, 2)  # 1:crop/weed object, 2: background
+
                     crop_image = crop_images[0]
-                    crop_image = np.where(crop_image.numpy() >= 0.5, 1, 0)  # 1:crop, 0:background
+                    crop_image = np.where(crop_image.numpy() <= 0.5, crop_image.numpy(), 1)  # 1:background
                     predict_temp2 = crop_image
                     crop_object = crop_objects[0]
-                    crop_object = np.where(crop_object.numpy() >= 0.5, 1, 2)    # 1:crop object, 2:background
+                    crop_object = np.where(crop_object.numpy() <= 0.5, 0, 1)    # 0:crop object, 1:background
+
                     weed_image = weed_images[0]
-                    weed_image = np.where(weed_image.numpy() >= 0.5, 1, 0)  # 1:weed, 0: background
+                    weed_image = np.where(weed_image.numpy() >= 0.5, weed_image.numpy(), 0)  # 1:weed, 0: background
                     predict_temp3 = weed_image
                     weed_object = weed_objects[0]
-                    weed_object = np.where(weed_object.numpy() >= 0.5, 1, 2)    # 1: weed object, 2: background
+                    weed_object = np.where(weed_object.numpy() >= 0.5, 1, 0)    # 1: weed object, 0: background
+                    
+                    # predict_temp = np.expand_dims(predict_temp, -1)
+                    # crop_image???????
+                    c_object_predict_axis = np.where(crop_object==1)
+                    predict_temp2[c_object_predict_axis] = 1
+                    predict_temp2_indices = np.where(predict_temp2!=1)
+                    predict_temp[predict_temp2_indices] = predict_temp[predict_temp2_indices] \
+                                                            * predict_temp2[predict_temp2_indices]
 
+                    w_object_predict_axis = np.where(weed_object==0)
+                    predict_temp3[w_object_predict_axis] = 0
+                    predict_temp3_indices = np.where(predict_temp3!=0)
+                    predict_temp[predict_temp3_indices] = predict_temp[predict_temp3_indices] \
+                                                            * predict_temp3[predict_temp3_indices]
+
+                    predict_temp = np.where(predict_temp >= 0.5, 1, 0)
                     cw_object_predict_axis = np.where(crop_weed_object==2)
                     predict_temp[cw_object_predict_axis] = 2    # 이 모델은 전 버전에서 잘 나온것을 확인했음
-                    predict_temp = np.expand_dims(predict_temp, -1)
-
-                    c_object_predict_axis = np.where(crop_object==2)
-                    c_object_predict_axis2 = np.where(crop_object!=2)
-                    predict_temp2[c_object_predict_axis] = 2
-                    predict_temp2[c_object_predict_axis2] = 0
-                    predict_temp2 = np.expand_dims(predict_temp2, -1)
-
-                    w_object_predict_axis = np.where(weed_object==2)
-                    w_object_predict_axis2 = np.where(weed_object!=2)
-                    predict_temp3[w_object_predict_axis] = 2
-                    predict_temp3[w_object_predict_axis2] = 1
-                    predict_temp3 = np.expand_dims(predict_temp3, -1)
-
-                    predict_temp4 = np.concatenate([predict_temp, predict_temp2, predict_temp3], -1)
-
-
-                    pred_mask_color = np.where(predict_temp4 == np.array([0,0,0], dtype=np.uint8),
-                                                np.array([255,0,0], dtype=np.uint8),
-                                                predict_temp4)
-                    pred_mask_color = np.where(predict_temp4 == np.array([1,1,1], dtype=np.uint8),
-                                                np.array([0,0,255], dtype=np.uint8),
-                                                pred_mask_color)
-                    pred_mask_color = np.where(predict_temp4 == np.array([2,2,2], dtype=np.uint8),
-                                                np.array([0,0,0], dtype=np.uint8),
-                                                pred_mask_color)
-                    func1 = lambda f:f != np.array([0,0,0], dtype=np.uint8)
-                    func2 = lambda f:f != np.array([1,1,1], dtype=np.uint8)
-                    pred_mask_color = np.where(func1(predict_temp4)&func2(predict_temp4),
-                                                np.array([0,0,0], dtype=np.uint8),
-                                                pred_mask_color)
-
-                    func3 = lambda r: r[:, :, 0] == 255 
-                    func4 = lambda g: g[:, :, 1] == 0 
-                    func5 = lambda b: b[:, :, 2] == 0
-
-                    func6 = lambda r: r[:, :, 0] == 0 
-                    func7 = lambda g: g[:, :, 1] == 0 
-                    func8 = lambda b: b[:, :, 2] == 255
-
-                    metric_pred = np.zeros([FLAGS.img_size, FLAGS.img_size], dtype=np.uint8) + 2
-                    metric_pred = np.where(func3(pred_mask_color) & func4(pred_mask_color) & func5(pred_mask_color), 0, 2)
-                    metric_pred = np.where(func6(pred_mask_color) & func7(pred_mask_color) & func8(pred_mask_color), 1, metric_pred)
 
                     label = batch_labels[j]
                     label = tf.cast(label, tf.uint8).numpy()
@@ -659,15 +602,15 @@ def main():
                     label_mask_color = np.where(label == np.array([0,0,0], dtype=np.uint8), np.array([255, 0, 0], dtype=np.uint8), label_mask_color)
                     label_mask_color = np.where(label == np.array([1,1,1], dtype=np.uint8), np.array([0, 0, 255], dtype=np.uint8), label_mask_color)
 
-                    miou_, crop_iou_, weed_iou_ = Measurement(predict=metric_pred,
+                    miou_, crop_iou_, weed_iou_ = Measurement(predict=predict_temp,
                                         label=batch_label, 
                                         shape=[FLAGS.img_size*FLAGS.img_size, ], 
                                         total_classes=FLAGS.total_classes).MIOU()
-                    f1_score_, recall_ = Measurement(predict=metric_pred,
+                    f1_score_, recall_ = Measurement(predict=predict_temp,
                                             label=batch_label,
                                             shape=[FLAGS.img_size*FLAGS.img_size, ],
                                             total_classes=FLAGS.total_classes).F1_score_and_recall()
-                    tdr_ = Measurement(predict=metric_pred,
+                    tdr_ = Measurement(predict=predict_temp,
                                             label=batch_label,
                                             shape=[FLAGS.img_size*FLAGS.img_size, ],
                                             total_classes=FLAGS.total_classes).TDR()
@@ -720,66 +663,40 @@ def main():
 
 
                     crop_weed_image = crop_weed_images[0]
-                    crop_weed_image = np.where(crop_weed_image.numpy() >= 0.5, 1, 0)    # 1:weed, 0: crop
-                    predict_temp = crop_weed_image
+                    # crop_weed_image = np.where(crop_weed_image.numpy() >= 0.5, 1, 0)    # 1:weed, 0: crop
+                    predict_temp = crop_weed_image.numpy()
                     crop_weed_object = crop_weed_objects[0]
                     crop_weed_object = np.where(crop_weed_object.numpy() >= 0.5, 1, 2)  # 1:crop/weed object, 2: background
+
                     crop_image = crop_images[0]
-                    crop_image = np.where(crop_image.numpy() >= 0.5, 1, 0)  # 1:crop, 0:background
+                    crop_image = np.where(crop_image.numpy() <= 0.5, crop_image.numpy(), 1)  # 1:background
                     predict_temp2 = crop_image
                     crop_object = crop_objects[0]
-                    crop_object = np.where(crop_object.numpy() >= 0.5, 1, 2)    # 1:crop object, 2:background
+                    crop_object = np.where(crop_object.numpy() <= 0.5, 0, 1)    # 0:crop object, 1:background
+
                     weed_image = weed_images[0]
-                    weed_image = np.where(weed_image.numpy() >= 0.5, 1, 0)  # 1:weed, 0: background
+                    weed_image = np.where(weed_image.numpy() >= 0.5, weed_image.numpy(), 0)  # 1:weed, 0: background
                     predict_temp3 = weed_image
                     weed_object = weed_objects[0]
-                    weed_object = np.where(weed_object.numpy() >= 0.5, 1, 2)    # 1: weed object, 2: background
+                    weed_object = np.where(weed_object.numpy() >= 0.5, 1, 0)    # 1: weed object, 0: background
+                    
+                    # predict_temp = np.expand_dims(predict_temp, -1)
+                    # crop_image???????
+                    c_object_predict_axis = np.where(crop_object==1)
+                    predict_temp2[c_object_predict_axis] = 1
+                    predict_temp2_indices = np.where(predict_temp2!=1)
+                    predict_temp[predict_temp2_indices] = predict_temp[predict_temp2_indices] \
+                                                            * predict_temp2[predict_temp2_indices]
 
+                    w_object_predict_axis = np.where(weed_object==0)
+                    predict_temp3[w_object_predict_axis] = 0
+                    predict_temp3_indices = np.where(predict_temp3!=0)
+                    predict_temp[predict_temp3_indices] = predict_temp[predict_temp3_indices] \
+                                                            * predict_temp3[predict_temp3_indices]
+
+                    predict_temp = np.where(predict_temp >= 0.5, 1, 0)
                     cw_object_predict_axis = np.where(crop_weed_object==2)
                     predict_temp[cw_object_predict_axis] = 2    # 이 모델은 전 버전에서 잘 나온것을 확인했음
-                    predict_temp = np.expand_dims(predict_temp, -1)
-
-                    c_object_predict_axis = np.where(crop_object==2)
-                    c_object_predict_axis2 = np.where(crop_object!=2)
-                    predict_temp2[c_object_predict_axis] = 2
-                    predict_temp2[c_object_predict_axis2] = 0
-                    predict_temp2 = np.expand_dims(predict_temp2, -1)
-
-                    w_object_predict_axis = np.where(weed_object==2)
-                    w_object_predict_axis2 = np.where(weed_object!=2)
-                    predict_temp3[w_object_predict_axis] = 2
-                    predict_temp3[w_object_predict_axis2] = 1
-                    predict_temp3 = np.expand_dims(predict_temp3, -1)
-
-                    predict_temp4 = np.concatenate([predict_temp, predict_temp2, predict_temp3], -1)
-
-
-                    pred_mask_color = np.where(predict_temp4 == np.array([0,0,0], dtype=np.uint8),
-                                                np.array([255,0,0], dtype=np.uint8),
-                                                predict_temp4)
-                    pred_mask_color = np.where(predict_temp4 == np.array([1,1,1], dtype=np.uint8),
-                                                np.array([0,0,255], dtype=np.uint8),
-                                                pred_mask_color)
-                    pred_mask_color = np.where(predict_temp4 == np.array([2,2,2], dtype=np.uint8),
-                                                np.array([0,0,0], dtype=np.uint8),
-                                                pred_mask_color)
-                    func1 = lambda f:f != np.array([0,0,0], dtype=np.uint8)
-                    func2 = lambda f:f != np.array([1,1,1], dtype=np.uint8)
-                    pred_mask_color = np.where(func1(predict_temp4)&func2(predict_temp4),
-                                                np.array([0,0,0], dtype=np.uint8),
-                                                pred_mask_color)
-
-                    func3 = lambda r: r[:, :, 0] == 255 
-                    func4 = lambda g: g[:, :, 1] == 0 
-                    func5 = lambda b: b[:, :, 2] == 0
-
-                    func6 = lambda r: r[:, :, 0] == 0 
-                    func7 = lambda g: g[:, :, 1] == 0 
-                    func8 = lambda b: b[:, :, 2] == 255
-
-                    metric_pred = np.zeros([FLAGS.img_size, FLAGS.img_size], dtype=np.uint8) + 2
-                    metric_pred = np.where(func3(pred_mask_color) & func4(pred_mask_color) & func5(pred_mask_color), 0, 2)
-                    metric_pred = np.where(func6(pred_mask_color) & func7(pred_mask_color) & func8(pred_mask_color), 1, metric_pred)
 
                     label = batch_labels[j]
                     label = tf.cast(label, tf.uint8).numpy()
@@ -792,15 +709,15 @@ def main():
                     label_mask_color = np.where(label == np.array([0,0,0], dtype=np.uint8), np.array([255, 0, 0], dtype=np.uint8), label_mask_color)
                     label_mask_color = np.where(label == np.array([1,1,1], dtype=np.uint8), np.array([0, 0, 255], dtype=np.uint8), label_mask_color)
 
-                    miou_, crop_iou_, weed_iou_ = Measurement(predict=metric_pred,
+                    miou_, crop_iou_, weed_iou_ = Measurement(predict=predict_temp,
                                         label=batch_label, 
                                         shape=[FLAGS.img_size*FLAGS.img_size, ], 
                                         total_classes=FLAGS.total_classes).MIOU()
-                    f1_score_, recall_ = Measurement(predict=metric_pred,
+                    f1_score_, recall_ = Measurement(predict=predict_temp,
                                             label=batch_label,
                                             shape=[FLAGS.img_size*FLAGS.img_size, ],
                                             total_classes=FLAGS.total_classes).F1_score_and_recall()
-                    tdr_ = Measurement(predict=metric_pred,
+                    tdr_ = Measurement(predict=predict_temp,
                                             label=batch_label,
                                             shape=[FLAGS.img_size*FLAGS.img_size, ],
                                             total_classes=FLAGS.total_classes).TDR()
@@ -931,3 +848,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+# %%
