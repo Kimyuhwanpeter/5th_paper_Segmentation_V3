@@ -164,7 +164,7 @@ def cal_loss(model, images, labels, crop_objectiness, weed_objectiness, total_ob
         # or i can add in V2 --> remember!!!!!!!!!!!!!!!!!!!!!!
         crop_predict = tf.nn.sigmoid(predict[:, 2])        
         crop_indices = tf.squeeze(tf.where(tf.not_equal(batch_labels, 1)),1)
-        weed_predict = tf.nn.sigmoid(predict[:, 4])
+        weed_predict = tf.nn.sigmoid(predict[:, 3])
         weed_indices = tf.squeeze(tf.where(tf.not_equal(batch_labels, 0)),1)
 
         numpy_predict = predict.numpy()
