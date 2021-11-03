@@ -12,15 +12,15 @@ import os
 
 FLAGS = easydict.EasyDict({"img_size": 512,
 
-                           "train_txt_path": "/yuhwan/yuhwan/Dataset/Segmentation/Crop_weed/datasets_IJRR2017/train.txt",
+                           "train_txt_path": "/yuhwan/yuhwan/Dataset/Segmentation/Crop_weed/rice_seedling_and_weed_dataset/train_fix.txt",
 
-                           "val_txt_path": "/yuhwan/yuhwan/Dataset/Segmentation/Crop_weed/datasets_IJRR2017/val.txt",
+                           "val_txt_path": "/yuhwan/yuhwan/Dataset/Segmentation/Crop_weed/rice_seedling_and_weed_dataset/val.txt",
 
-                           "test_txt_path": "/yuhwan/yuhwan/Dataset/Segmentation/Crop_weed/datasets_IJRR2017/test.txt",
+                           "test_txt_path": "/yuhwan/yuhwan/Dataset/Segmentation/Crop_weed/rice_seedling_and_weed_dataset/test.txt",
                            
-                           "label_path": "/yuhwan/yuhwan/Dataset/Segmentation/Crop_weed/datasets_IJRR2017/raw_aug_gray_mask/",
+                           "label_path": "/yuhwan/yuhwan/Dataset/Segmentation/Crop_weed/rice_seedling_and_weed_dataset/aug_label_mask/",
                            
-                           "image_path": "/yuhwan/yuhwan/Dataset/Segmentation/Crop_weed/datasets_IJRR2017/raw_aug_rgb_img/",
+                           "image_path": "/yuhwan/yuhwan/Dataset/Segmentation/Crop_weed/rice_seedling_and_weed_dataset/aug_image/",
                            
                            "pre_checkpoint": False,
                            
@@ -38,11 +38,11 @@ FLAGS = easydict.EasyDict({"img_size": 512,
 
                            "batch_size": 4,
 
-                           "sample_images": "/yuhwan/yuhwan/checkpoint/Segmenation/V3_5th_paper/BoniRob/sample_images",
+                           "sample_images": "/yuhwan/yuhwan/checkpoint/Segmenation/V3_5th_paper/rice_seedling_weed/sample_images",
 
-                           "save_checkpoint": "/yuhwan/yuhwan/checkpoint/Segmenation/V3_5th_paper/BoniRob/checkpoint",
+                           "save_checkpoint": "/yuhwan/yuhwan/checkpoint/Segmenation/V3_5th_paper/rice_seedling_weed/checkpoint",
 
-                           "save_print": "/yuhwan/yuhwan/checkpoint/Segmenation/V3_5th_paper/BoniRob/train_out.txt",
+                           "save_print": "/yuhwan/yuhwan/checkpoint/Segmenation/V3_5th_paper/rice_seedling_weed/train_out.txt",
 
                            "test_images": "D:/[1]DB/[5]4th_paper_DB/crop_weed/V2/test_images",
 
@@ -50,6 +50,7 @@ FLAGS = easydict.EasyDict({"img_size": 512,
 
 
 optim = tf.keras.optimizers.Adam(FLAGS.lr, beta_1=0.5)
+optim2 = tf.keras.optimizers.Adam(FLAGS.lr, beta_1=0.5)
 color_map = np.array([[255, 0, 0], [0, 0, 255], [0,0,0]], dtype=np.uint8)
 
 def tr_func(image_list, label_list):
@@ -115,7 +116,7 @@ def SigmoidFocalCrossEntropy(y_true, y_pred):
 @tf.function
 def cal_loss(model, images, labels, objectiness, class_im_plain, ignore_label):
 
-    with tf.GradientTape() as tape:
+    with tf.GradientTape() as tape, tf.GradientTape(persistent=True) as tape3:
 
         
         batch_labels = tf.reshape(labels, [-1,])
@@ -151,8 +152,10 @@ def cal_loss(model, images, labels, objectiness, class_im_plain, ignore_label):
         loss = no_obj_loss + (seg_loss + obj_loss)
 
     weights = model.trainable_variables
-    grads = tape.gradient(loss, model.trainable_variables)
-    # optim.apply_gradients(zip(grads, model.trainable_variables))
+    # func2_ = lambda f:[f[i].name for i in range(len(weights))]
+    # weights_name = func2_(weights)
+    grads = tape.gradient(loss, weights)
+    optim.apply_gradients(zip(grads, weights))
 
     with tf.GradientTape() as tape2:
 
@@ -193,14 +196,17 @@ def cal_loss(model, images, labels, objectiness, class_im_plain, ignore_label):
         seg_loss = tf.reduce_mean(seg_loss)
         loss2 = no_obj_loss + (seg_loss + obj_loss)
         
+        loss = loss2
+        loss = tf.identity(loss, name="final_loss")
 
-    grads2 = tape2.gradient(loss2, weights)
-    func1_ = lambda f, g:[(f[i] + g[i])/2 for i in range(len(grads))]
+    grads2 = tape2.gradient(loss, model.trainable_variables)
+    func1_ = lambda f, g:[(f[i] + g[i]) for i in range(len(grads))]
 
     grads3 = func1_(grads, grads2)
-    optim.apply_gradients(zip(grads3, weights))
+    grads3 = [tf.clip_by_value(g, -1.0, 1.0) for g in grads3]
+    optim2.apply_gradients(zip(grads3, weights))
 
-    return loss2
+    return loss
 
 
 # yilog(h(xi;θ))+(1−yi)log(1−h(xi;θ))
@@ -225,7 +231,7 @@ def main():
     model.summary()
 
     if FLAGS.pre_checkpoint:
-        ckpt = tf.train.Checkpoint(model=model, optim=optim)
+        ckpt = tf.train.Checkpoint(model=model, optim=optim, optim2=optim2)
         ckpt_manager = tf.train.CheckpointManager(ckpt, FLAGS.pre_checkpoint_path, 5)
 
         if ckpt_manager.latest_checkpoint:
@@ -569,143 +575,11 @@ def main():
             if not os.path.isdir(model_dir):
                 print("Make {} folder to store the weight!".format(epoch))
                 os.makedirs(model_dir)
-            ckpt = tf.train.Checkpoint(model=model, optim=optim)
+            ckpt = tf.train.Checkpoint(model=model, optim=optim, optim2=optim2)
             ckpt_dir = model_dir + "/Crop_weed_model_{}.ckpt".format(epoch)
             ckpt.save(ckpt_dir)
-    else:
-        test_list = np.loadtxt(FLAGS.test_txt_path, dtype="<U200", skiprows=0, usecols=0)
+            # model.save_weights(ckpt_dir)
 
-        test_img_dataset = [FLAGS.image_path + data for data in test_list]
-        test_lab_dataset = [FLAGS.label_path + data for data in test_list]
-
-        test_ge = tf.data.Dataset.from_tensor_slices((test_img_dataset, test_lab_dataset))
-        test_ge = test_ge.map(test_func2)
-        test_ge = test_ge.batch(1)
-        test_ge = test_ge.prefetch(tf.data.experimental.AUTOTUNE)
-
-        test_iter = iter(test_ge)
-        miou = 0.
-        f1_score = 0.
-        tdr = 0.
-        sensitivity = 0.
-        crop_iou = 0.
-        weed_iou = 0.
-        pre_ = 0.
-        TP_, TN_, FP_, FN_ = 0, 0, 0, 0
-        for i in range(len(test_img_dataset)):
-            batch_images, nomral_img, batch_labels = next(test_iter)
-            batch_labels = tf.squeeze(batch_labels, -1)
-            for j in range(1):
-                batch_image = tf.expand_dims(batch_images[j], 0)
-                logits = run_model(model, batch_image, False) # type을 batch label과 같은 type으로 맞춰주어야함
-                object_predict = tf.nn.sigmoid(logits[0, :, :, 1])
-                predict = tf.nn.sigmoid(logits[0, :, :, 0:1])
-                predict = np.where(predict.numpy() >= 0.5, 1, 0)
-                predict_temp = predict
-                image = predict
-                object_predict_predict = np.where(object_predict.numpy() >= 0.5, 1, 2)
-                onject_predict_axis = np.where(object_predict_predict==2)   # 2 배경성분이 있는 축만 가지고 옴
-                predict_temp[onject_predict_axis] = 2
-
-                #batch_image = tf.expand_dims(batch_images[j], 0)
-                #predict = run_model(model, batch_image, False) # type을 batch label과 같은 type으로 맞춰주어야함
-                #predict = tf.nn.sigmoid(predict[0, :, :, 0:1])
-                #predict = np.where(predict.numpy() >= 0.5, 1, 0)
-
-                batch_label = tf.cast(batch_labels[j], tf.uint8).numpy()
-                batch_label = np.where(batch_label == FLAGS.ignore_label, 2, batch_label)    # 2 is void
-                batch_label = np.where(batch_label == 255, 0, batch_label)
-                batch_label = np.where(batch_label == 128, 1, batch_label)
-                ignore_label_axis = np.where(batch_label==2)   # 출력은 x,y axis로 나옴!
-                predict[ignore_label_axis] = 2
-
-                predict_temp1 = predict_temp
-                batch_label1 = batch_label
-                miou_, crop_iou_, weed_iou_ = Measurement(predict=predict_temp1,
-                                    label=batch_label1, 
-                                    shape=[FLAGS.img_size*FLAGS.img_size, ], 
-                                    total_classes=FLAGS.total_classes).MIOU()
-                predict_temp2 = predict_temp
-                batch_label2 = batch_label
-                f1_score_, recall_, TP, TN, FP, FN = Measurement(predict=predict_temp2,
-                                        label=batch_label2,
-                                        shape=[FLAGS.img_size*FLAGS.img_size, ],
-                                        total_classes=FLAGS.total_classes).F1_score_and_recall()
-                predict_temp3 = predict_temp
-                batch_label3 = batch_label
-                tdr_ = Measurement(predict=predict_temp3,
-                                        label=batch_label3,
-                                        shape=[FLAGS.img_size*FLAGS.img_size, ],
-                                        total_classes=FLAGS.total_classes).TDR()
-                predict_temp4 = predict_temp
-                batch_label4 = batch_label
-                output_confusion, temp_output_3D = Measurement(predict=predict_temp4,
-                                        label=batch_label4,
-                                        shape=[FLAGS.img_size*FLAGS.img_size, ],
-                                        total_classes=FLAGS.total_classes).show_confusion()
-                output_confusion_ = output_confusion
-
-                pred_mask_color = color_map[predict_temp]  # 논문그림처럼 할것!
-                pred_mask_color = np.squeeze(pred_mask_color, 2)
-                batch_label = np.expand_dims(batch_label, -1)
-                batch_label = np.concatenate((batch_label, batch_label, batch_label), -1)
-                label_mask_color = np.zeros([FLAGS.img_size, FLAGS.img_size, 3], dtype=np.uint8)
-                label_mask_color = np.where(batch_label == np.array([0,0,0], dtype=np.uint8), np.array([255, 0, 0], dtype=np.uint8), label_mask_color)
-                label_mask_color = np.where(batch_label == np.array([1,1,1], dtype=np.uint8), np.array([0, 0, 255], dtype=np.uint8), label_mask_color)
-
-                temp_img = np.concatenate((predict_temp, predict_temp, predict_temp), -1)
-                image = np.concatenate((image, image, image), -1)
-                pred_mask_warping = np.where(temp_img == np.array([2,2,2], dtype=np.uint8), nomral_img[j], image)
-                pred_mask_warping = np.where(temp_img == np.array([0,0,0], dtype=np.uint8), np.array([255, 0, 0], dtype=np.uint8), pred_mask_warping)
-                pred_mask_warping = np.where(temp_img == np.array([1,1,1], dtype=np.uint8), np.array([0, 0, 255], dtype=np.uint8), pred_mask_warping)
-                pred_mask_warping /= 255.
-
-                output_confusion_warp = np.where(temp_output_3D == np.array([0,0,0], dtype=np.uint8), nomral_img[j], temp_output_3D)
-                output_confusion_warp = np.where(temp_output_3D == np.array([10,10,10], dtype=np.uint8), np.array([255, 0, 0], dtype=np.uint8), output_confusion_warp)
-                output_confusion_warp = np.where(temp_output_3D == np.array([20,20,20], dtype=np.uint8), np.array([0, 255, 255], dtype=np.uint8), output_confusion_warp)
-                output_confusion_warp = np.where(temp_output_3D == np.array([30,30,30], dtype=np.uint8), np.array([255, 0, 255], dtype=np.uint8), output_confusion_warp)
-                output_confusion_warp = np.where(temp_output_3D == np.array([40,40,40], dtype=np.uint8), np.array([255, 255, 0], dtype=np.uint8), output_confusion_warp)
-                output_confusion_warp = np.array(output_confusion_warp, dtype=np.int32)
-                output_confusion_warp = output_confusion_warp / 255
-
-                name = test_img_dataset[i].split("/")[-1].split(".")[0]
-                plt.imsave(FLAGS.test_images + "/" + name + "_label.png", label_mask_color)
-                plt.imsave(FLAGS.test_images + "/" + name + "_predict.png", pred_mask_color)
-                plt.imsave(FLAGS.test_images + "/" + name + "_predict_warp.png", pred_mask_warping)
-                plt.imsave(FLAGS.test_images + "/" + name + "_output_confusion.png", output_confusion)
-                plt.imsave(FLAGS.test_images + "/" + name + "output_confusion_warp.png", output_confusion_warp)
-
-                miou += miou_
-                f1_score += f1_score_
-                sensitivity += recall_
-                tdr += tdr_
-                crop_iou += crop_iou_
-                weed_iou += weed_iou_
-                TP_ += TP   # 이 부분을 이미지에 표시해야한다
-                TN_ += TN   # 이 부분을 이미지에 표시해야한다
-                FP_ += FP   # 이 부분을 이미지에 표시해야한다
-                FN_ += FN   # 이 부분을 이미지에 표시해야한다
-
-
-        print("test mIoU = %.4f (crop_iou = %.4f, weed_iou = %.4f), test F1_score = %.4f, test sensitivity = %.4f, test TDR = %.4f" % (miou / len(test_img_dataset),
-                                                                                                                                            crop_iou / len(test_img_dataset),
-                                                                                                                                            weed_iou / len(test_img_dataset),
-                                                                                                                                            f1_score / len(test_img_dataset),
-                                                                                                                                            sensitivity / len(test_img_dataset),
-                                                                                                                                            tdr / len(test_img_dataset)))
-        #print(pre_ / len(test_img_dataset))
-        TP_FP = (TP_ + FP_) + 1e-7
-
-        TP_FN = (TP_ + FN_) + 1e-7
-
-        out = np.zeros((1))
-        Precision = np.divide(TP_, TP_FP)
-        Recall = np.divide(TP_, TP_FN)
-
-        Pre_Re = (Precision + Recall) + 1e-7
-
-        F1_score = np.divide(2. * (Precision * Recall), Pre_Re)
-        print(F1_score, Recall)
 
 if __name__ == "__main__":
     main()
