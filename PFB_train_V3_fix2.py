@@ -49,7 +49,7 @@ FLAGS = easydict.EasyDict({"img_size": 512,
                            "train": True})
 
 
-optim = tf.keras.optimizers.Adam(FLAGS.lr, beta_1=0.5)
+optim = tf.keras.optimizers.Adam(FLAGS.lr, beta_1=0.9)
 optim2 = tf.keras.optimizers.Adam(FLAGS.lr, beta_1=0.5)
 color_map = np.array([[255, 0, 0], [0, 0, 255], [0,0,0]], dtype=np.uint8)
 
@@ -97,7 +97,7 @@ def test_func(image_list, label_list):
 
     return img, lab
 
-
+@tf.function
 def run_model(model, images, training=True):
     return model(images, training=training)
 
@@ -109,11 +109,21 @@ def dice_loss(y_true, y_pred):
 
     return 1 - numerator / denominator
 
-
 def SigmoidFocalCrossEntropy(y_true, y_pred):
     return tfa.losses.SigmoidFocalCrossEntropy(from_logits=True,
                                                 reduction=tf.keras.losses.Reduction.NONE)(y_true, y_pred)
-@tf.function
+
+def tversky_loss(y_true, y_predict):
+
+    y_predict = tf.nn.sigmoid(y_predict)
+    true_pos = tf.keras.backend.sum(y_true * y_predict)
+    false_neg = tf.keras.backend.sum(y_true * (1 - y_predict))
+    false_pos = tf.keras.backend.sum(1 - (y_true) * y_predict)
+    alpha = 0.7
+    loss = (true_pos + 1) / (true_pos + alpha*false_neg + (1 - alpha) * false_pos + 1)
+
+    return 1 - loss
+
 def cal_loss(model, images, labels, objectiness, class_im_plain, ignore_label):
 
     with tf.GradientTape() as tape:
@@ -133,48 +143,37 @@ def cal_loss(model, images, labels, objectiness, class_im_plain, ignore_label):
         label_objectiness = tf.cast(tf.reshape(objectiness, [-1,]), tf.float32)
         logit_objectiness = raw_logits[:, -1]
 
-        seg_loss = 0.
-
         no_obj_indices = tf.squeeze(tf.where(tf.equal(tf.reshape(objectiness, [-1,]), 0)),1)
         no_logit_objectiness = tf.gather(logit_objectiness, no_obj_indices)
         no_obj_labels = tf.cast(tf.gather(label_objectiness, no_obj_indices), tf.float32)
-        no_obj_loss = -(1. - no_obj_labels) * tf.math.log(1 - tf.nn.sigmoid(no_logit_objectiness) + 1e-7)
+        no_obj_loss = (tf.math.abs(no_obj_labels - tf.nn.sigmoid(no_logit_objectiness))) / 2.0
         no_obj_loss = tf.reduce_mean(no_obj_loss)
 
         obj_indices = tf.squeeze(tf.where(tf.not_equal(tf.reshape(objectiness, [-1,]), 0)),1)
         yes_logit_objectiness = tf.gather(logit_objectiness, obj_indices)
         yes_obj_labels = tf.cast(tf.gather(label_objectiness, obj_indices), tf.float32)
-        obj_loss = -yes_obj_labels * tf.math.log(tf.nn.sigmoid(yes_logit_objectiness) + 1e-7)
+        obj_loss = (tf.math.abs(yes_obj_labels - tf.nn.sigmoid(yes_logit_objectiness))) / 2.0
         obj_loss = tf.reduce_mean(obj_loss)
 
-        if len(crop_indices) != 0:
-            crop_labels = tf.cast(tf.gather(batch_labels, crop_indices), tf.float32)
-            crop_predict = tf.gather(predict, crop_indices)
-            crop_dice_loss = dice_loss(crop_labels, tf.squeeze(crop_predict[:, 0:1], -1))
-            crop_cross_entropy = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(crop_labels, tf.squeeze(crop_predict[:, 0:1], -1)))
-        else:
-            crop_dice_loss = 0.
-            crop_cross_entropy = 0.
+        crop_labels = tf.cast(tf.gather(batch_labels, crop_indices), tf.float32)
+        crop_predict = tf.gather(predict, crop_indices)
+        weed_labels = tf.cast(tf.gather(batch_labels, weed_indices), tf.float32)
+        weed_predict = tf.gather(predict, weed_indices)
 
-        if len(weed_indices) != 0:
-            weed_labels = tf.cast(tf.gather(batch_labels, weed_indices), tf.float32)
-            weed_predict = tf.gather(predict, weed_indices)
-            weed_dice_loss = dice_loss(weed_labels, tf.squeeze(weed_predict[:, 0:1], -1))
-            weed_cross_entropy = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(weed_labels, tf.squeeze(weed_predict[:, 0:1], -1)))
+        if len(weed_indices) == 0 and len(crop_indices) != 0:
+            seg_loss = dice_loss(batch_labels, tf.squeeze(predict[:, 0:1], -1)) \
+                + tf.nn.sigmoid_cross_entropy_with_logits(batch_labels, tf.squeeze(predict[:, 0:1], -1))
+            seg_loss = tf.reduce_mean(seg_loss)
+        elif len(weed_indices) != 0 and len(crop_indices) == 0:
+            seg_loss = dice_loss(batch_labels, tf.squeeze(predict[:, 0:1], -1)) \
+                + tf.nn.sigmoid_cross_entropy_with_logits(batch_labels, tf.squeeze(predict[:, 0:1], -1))
+            seg_loss = tf.reduce_mean(seg_loss)
         else:
-            weed_dice_loss = 0.
-            weed_cross_entropy = 0.
-
-        seg_loss = dice_loss(batch_labels, tf.squeeze(predict[:, 0:1], -1)) \
-            + crop_dice_loss \
-            + weed_dice_loss \
-            + crop_cross_entropy \
-            + weed_cross_entropy \
-            + tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(batch_labels, tf.squeeze(predict[:, 0:1], -1)))    
-        seg_loss = seg_loss
-        # obj_loss = crop_cross_entropy + crop_dice_loss + weed_dice_loss + weed_cross_entropy + obj_loss
+            seg_loss = tf.reduce_mean(dice_loss(crop_labels, tf.squeeze(crop_predict[:, 0:1], -1)) + tf.nn.sigmoid_cross_entropy_with_logits(crop_labels, tf.squeeze(crop_predict[:, 0:1], -1))) \
+                + tf.reduce_mean(dice_loss(weed_labels, tf.squeeze(weed_predict[:, 0:1], -1)) + tf.nn.sigmoid_cross_entropy_with_logits(weed_labels, tf.squeeze(weed_predict[:, 0:1], -1)))
 
         loss = no_obj_loss + (seg_loss + obj_loss)
+    
 
     weights = model.trainable_variables
     grads = tape.gradient(loss, model.trainable_variables)
