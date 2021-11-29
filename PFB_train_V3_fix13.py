@@ -10,7 +10,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import easydict
 import os
-
+ 
 FLAGS = easydict.EasyDict({"img_size": 512,
 
                            "train_txt_path": "/yuhwan/yuhwan/Dataset/Segmentation/Crop_weed/CWFID/train_fix.txt",
