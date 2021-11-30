@@ -10,7 +10,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import easydict
 import os
-
+ 
 FLAGS = easydict.EasyDict({"img_size": 512,
 
                            "train_txt_path": "/yuwhan/yuwhan/Dataset/Segmentation/BoniRob/train.txt",
