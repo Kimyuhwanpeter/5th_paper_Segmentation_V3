@@ -5,3 +5,7 @@
 
 * Final version is released!
 * Add state of the art experiment !
+
+* CWFID (0.8970) --> 4,9,32 images
+* BoniRob (0.9452) --> 284, 73, 303_2 images
+* rice seedling and weed (...)
