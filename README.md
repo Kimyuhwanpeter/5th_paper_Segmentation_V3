@@ -3,4 +3,5 @@
 * I will upload other code later
 * fix2 ==> considering all loss, not summation
 
-* Final version 5 is best. (initial lr = 0.001, after 36 epoch lr is 0.0001)
+* Final version is released!
+* Add state of the art experiment !
