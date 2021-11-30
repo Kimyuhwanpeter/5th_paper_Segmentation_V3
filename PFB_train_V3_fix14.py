@@ -27,7 +27,7 @@ FLAGS = easydict.EasyDict({"img_size": 512,
                            
                            "pre_checkpoint_path": "/yuwhan/Edisk/yuwhan/Edisk/Segmentation/V3/CWFID/checkpoint/36",
                            
-                           "lr": 0.001,
+                           "lr": 0.0001,
 
                            "min_lr": 1e-7,
                            
